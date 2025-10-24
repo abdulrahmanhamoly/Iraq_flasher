@@ -1,18 +1,51 @@
+/*
+ * Pattern Player for Iraq Flasher
+ * 
+ * This sketch plays back pre-programmed LED patterns based on button selection.
+ * Features:
+ * - 18 pre-programmed patterns (modes 1-18)
+ * - Hierarchical mode selection using 7 buttons
+ * - BTN_14 and BTN_15 act as mode modifiers
+ * - Debounced button inputs
+ * - Status LED indicates active playback
+ * 
+ * Mode Selection:
+ * - BTN_9-13 alone: Modes 2-6 (or mode 1 if none)
+ * - BTN_14 + BTN_9-13: Modes 8-12 (or mode 7 if none)
+ * - BTN_15 + BTN_9-13: Modes 14-18 (or mode 13 if none)
+ */
+
 #include <Arduino.h>
 
-const uint8_t LED_OUT_PIN = 7;
-const uint8_t STATUS_LED = 5;
+// ============================================================================
+// PIN DEFINITIONS
+// ============================================================================
 
+const uint8_t LED_OUT_PIN = 7;      // LED output for pattern playback
+const uint8_t STATUS_LED = 5;       // Status indicator (on during playback)
+
+// Mode selection buttons
 const uint8_t BTN_9  = 9;
 const uint8_t BTN_10 = 10;
 const uint8_t BTN_11 = 11;
 const uint8_t BTN_12 = 12;
 const uint8_t BTN_13 = 13;
-const uint8_t BTN_14 = 14;
-const uint8_t BTN_15 = 15;
+const uint8_t BTN_14 = 14;          // Mode modifier (modes 7-12)
+const uint8_t BTN_15 = 15;          // Mode modifier (modes 13-18)
 
-const unsigned long DEBOUNCE_MS = 50UL;
+// ============================================================================
+// CONFIGURATION CONSTANTS
+// ============================================================================
 
+const unsigned long DEBOUNCE_MS = 50UL;  // Button debounce time
+
+// ============================================================================
+// PRE-PROGRAMMED PATTERNS
+// ============================================================================
+// Each pattern is an array of durations in milliseconds
+// Even indices = LED ON, Odd indices = LED OFF
+
+// Mode 1 pattern
 const uint16_t parts_mode1[] = {
   75,60,65,65,60,130,65,60,60,80,60,135,65,65,60,75,475,35,60,135,65,50,70,65,155,40,70,65,60,60,150,60,65,40,75,75,465,25,70,140,65,40,70,70,60,125,65,60,80,55,65,130,65,55,80,55,55,135,65,50,75,60,155,45,60,55,80,60,120,70,60,60,75,70,50,140,60,60,70,75,150,45,65,55,85,60,55,135,65,50,70,65,155,45,60,55,75,65,55,130,65,50,75,60,155,45,60,50,80,55,60,130,65,40,85,60,150,40,60,55,90,60,55,145,60,35,90,70,270,225,60,125,60,50,75,65,50,140,50,60,70,75,40,155,55,40,60,100,135,55,245,40,45,165,60,190,50,140,60,40,70,85,50,145,60,45,75,70,40,155,60,40,75,90,250,215,140,45,60,50,80,50,45,155,60,45,80,65,45,155,60,220,45,145,55,50,70,85,40,150,50,45,65,95,45,160,60,205,55,150,55,45,75,75,40,150,55,45,85,70,50,145,55,40,70,100,55,135,60,225,125,50,60,55,75,70,40,145,60,50,75,75,50,145,55,60,65,95,255,215,145,45,60,45,80,60,50,150,55,50,70,75,50,165,60,200,50,35,65,45,50,45,65,80,45,160,55,60,70,65,40,40,75,35,50,60,70,80,55,145,60,50,70,65,45,35,75,30,50,60,70,70,50,155,60,50,80,50,50,40,80,25,55,50,70,65,50,170,45,40,85,60,155,40,65,45,85,50,55,155,65,50,75,55,45,40,70,40,45,55,75,55,45,35,75,50,50,35,90,50,50,35,100,20,50,50,80,45,45,40,85,45,50,35,85,45,50,35,90,40,50,45,90,35,45,40,95,35,45,45,90,40,45,40,90,40,45,40,85,40,50,50,80,40,50,45,85,30,40,55,90,25,45,60,80,45,170,45,100,15,95,40,165,50,65,40,85,55,150,45,70,50,75,50,160,40,65,50,70,60,160,40,60,45,75,55,160,45,65,40,80,60,155,45,70,40,60,70,150,45,65,55,65,70,260,220,135,55,65,30,80,60,60,140,65,50,70,75,50,150,60,35,65,90,145,45,65,225,130,45,65,45,75,65,50,155,65,550,885,480
 };
@@ -103,8 +136,13 @@ const uint16_t parts_mode18[] = {
 };
 const size_t NUM_MODE18 = sizeof(parts_mode18) / sizeof(parts_mode18[0]);
 
+// ============================================================================
+// PATTERN LOOKUP TABLES
+// ============================================================================
+
+// Array of pointers to pattern arrays (indexed by mode number)
 const uint16_t* const modeParts[] = {
-  nullptr,
+  nullptr,        // Mode 0 (unused)
   parts_mode1,
   parts_mode2,
   parts_mode3,
@@ -125,8 +163,9 @@ const uint16_t* const modeParts[] = {
   parts_mode18
 };
 
+// Array of pattern lengths (indexed by mode number)
 const size_t modeLengths[] = {
-  0,
+  0,              // Mode 0 (unused)
   NUM_MODE1,
   NUM_MODE2,
   NUM_MODE3,
@@ -147,9 +186,22 @@ const size_t modeLengths[] = {
   NUM_MODE18
 };
 
-volatile uint8_t currentMode = 1;
-volatile bool modeChanged = false;
+// ============================================================================
+// GLOBAL VARIABLES
+// ============================================================================
 
+volatile uint8_t currentMode = 1;   // Currently selected mode (1-18)
+volatile bool modeChanged = false;  // Flag indicating mode change
+
+// ============================================================================
+// BUTTON READING FUNCTIONS
+// ============================================================================
+
+/**
+ * Read all button states and return as a bitmask
+ * Bit 0 = BTN_9, Bit 1 = BTN_10, ..., Bit 6 = BTN_15
+ * LOW (pressed) = 1, HIGH (released) = 0
+ */
 static inline uint8_t readSwitchMask() {
   uint8_t m = 0;
   if (digitalRead(BTN_9)  == LOW) m |= (1 << 0);
@@ -162,54 +214,78 @@ static inline uint8_t readSwitchMask() {
   return m;
 }
 
+/**
+ * Convert button mask to mode number (1-18)
+ * Hierarchical selection:
+ * - BTN_14 pressed: modes 7-12
+ * - BTN_15 pressed: modes 13-18
+ * - Neither: modes 1-6
+ * Within each group, BTN_9-13 select specific mode
+ */
 static inline uint8_t modeFromMask(uint8_t m) {
-  bool s14 = (m & (1 << 5)) != 0;
-  bool s15 = (m & (1 << 6)) != 0;
+  bool s14 = (m & (1 << 5)) != 0;  // BTN_14 pressed?
+  bool s15 = (m & (1 << 6)) != 0;  // BTN_15 pressed?
 
+  // BTN_14 pressed: modes 7-12
   if (s14) {
-    if (m & (1 << 0)) return 8;
-    if (m & (1 << 1)) return 9;
-    if (m & (1 << 2)) return 10;
-    if (m & (1 << 3)) return 11;
-    if (m & (1 << 4)) return 12;
-    return 7;
+    if (m & (1 << 0)) return 8;   // BTN_9
+    if (m & (1 << 1)) return 9;   // BTN_10
+    if (m & (1 << 2)) return 10;  // BTN_11
+    if (m & (1 << 3)) return 11;  // BTN_12
+    if (m & (1 << 4)) return 12;  // BTN_13
+    return 7;                     // BTN_14 alone
   }
 
+  // BTN_15 pressed: modes 13-18
   if (s15) {
-    if (m & (1 << 0)) return 14;
-    if (m & (1 << 1)) return 15;
-    if (m & (1 << 2)) return 16;
-    if (m & (1 << 3)) return 17;
-    if (m & (1 << 4)) return 18;
-    return 13;
+    if (m & (1 << 0)) return 14;  // BTN_9
+    if (m & (1 << 1)) return 15;  // BTN_10
+    if (m & (1 << 2)) return 16;  // BTN_11
+    if (m & (1 << 3)) return 17;  // BTN_12
+    if (m & (1 << 4)) return 18;  // BTN_13
+    return 13;                    // BTN_15 alone
   }
 
-  if (m & (1 << 0)) return 2;
-  if (m & (1 << 1)) return 3;
-  if (m & (1 << 2)) return 4;
-  if (m & (1 << 3)) return 5;
-  if (m & (1 << 4)) return 6;
+  // No modifier: modes 1-6
+  if (m & (1 << 0)) return 2;     // BTN_9
+  if (m & (1 << 1)) return 3;     // BTN_10
+  if (m & (1 << 2)) return 4;     // BTN_11
+  if (m & (1 << 3)) return 5;     // BTN_12
+  if (m & (1 << 4)) return 6;     // BTN_13
 
-  return currentMode;
+  return currentMode;             // No buttons pressed, keep current mode
 }
 
+// ============================================================================
+// MODE SELECTION LOGIC
+// ============================================================================
+
+/**
+ * Poll buttons and update mode if changed
+ * Uses debouncing and arming logic to prevent spurious mode changes
+ * Mode changes only when buttons transition from all-released to pressed
+ */
 void pollButtonsAndMaybeChangeMode() {
-  static uint8_t lastRaw = 0;
-  static uint8_t stable = 0;
-  static unsigned long tmark = 0;
-  static bool armed = true;
+  static uint8_t lastRaw = 0;           // Last raw button reading
+  static uint8_t stable = 0;            // Debounced stable state
+  static unsigned long tmark = 0;       // Time of last change
+  static bool armed = true;             // Armed for mode change
 
   uint8_t raw = readSwitchMask();
 
+  // Debounce logic
   if (raw != lastRaw) {
     lastRaw = raw;
     tmark = millis();
   } else if ((millis() - tmark) >= DEBOUNCE_MS && raw != stable) {
     stable = raw;
 
+    // Arm when all buttons released
     if (stable == 0) {
       armed = true;
-    } else if (armed) {
+    }
+    // Change mode when armed and buttons pressed
+    else if (armed) {
       uint8_t nm = modeFromMask(stable);
       currentMode = nm;
       modeChanged = true;
@@ -218,37 +294,67 @@ void pollButtonsAndMaybeChangeMode() {
   }
 }
 
+/**
+ * Wait for specified duration while checking for mode changes
+ * Returns true if mode changed during wait, false otherwise
+ */
 bool waitWithButtonCheck(unsigned long durationMs) {
   unsigned long start = millis();
   while (millis() - start < durationMs) {
     pollButtonsAndMaybeChangeMode();
     if (modeChanged) return true;
-    delay(8);
+    delay(8);  // Small delay to prevent busy-waiting
   }
   return false;
 }
 
+// ============================================================================
+// PATTERN PLAYBACK
+// ============================================================================
+
+/**
+ * Play the current mode's pattern in a loop
+ * Exits when mode changes
+ * Even pattern indices turn LED ON, odd indices turn LED OFF
+ */
 void runCurrentModePattern() {
   uint8_t mode = currentMode;
   const uint16_t* pattern = modeParts[mode];
   size_t len = modeLengths[mode];
+  
+  // Skip if invalid pattern
   if (pattern == nullptr || len == 0) return;
+  
+  // Turn on status LED during playback
   digitalWrite(STATUS_LED, HIGH);
+  
+  // Loop pattern until mode changes
   while (!modeChanged) {
     for (size_t i = 0; i < len; ++i) {
+      // Even indices = LED ON, odd indices = LED OFF
       digitalWrite(LED_OUT_PIN, (i & 1) == 0 ? HIGH : LOW);
+      
+      // Wait for pattern duration, checking for mode change
       if (waitWithButtonCheck(pattern[i])) break;
     }
   }
+  
+  // Turn off status LED when done
   digitalWrite(STATUS_LED, LOW);
 }
 
+// ============================================================================
+// ARDUINO SETUP
+// ============================================================================
+
 void setup() {
+  // Configure output pins
   pinMode(LED_OUT_PIN, OUTPUT);
   digitalWrite(LED_OUT_PIN, LOW);
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
 
+  // Configure button input pins with pullups
   pinMode(BTN_9,  INPUT_PULLUP);
   pinMode(BTN_10, INPUT_PULLUP);
   pinMode(BTN_11, INPUT_PULLUP);
@@ -257,13 +363,23 @@ void setup() {
   pinMode(BTN_14, INPUT_PULLUP);
   pinMode(BTN_15, INPUT_PULLUP);
 
+  // Initialize to mode 1
   currentMode = 1;
   modeChanged = false;
 }
 
+// ============================================================================
+// MAIN LOOP
+// ============================================================================
+
 void loop() {
+  // Clear mode change flag
   modeChanged = false;
+  
+  // Run the current mode's pattern (loops until mode changes)
   runCurrentModePattern();
+  
+  // Ensure LED is off between mode changes
   digitalWrite(LED_OUT_PIN, LOW);
 }
 
