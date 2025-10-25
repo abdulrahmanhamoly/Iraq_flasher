@@ -7,10 +7,11 @@
  * Features:
  * - Records 3-bit LED states (0-7) from 3 button combinations
  * - Each LED state represents which of the 3 LEDs should be ON
+ * - **Records individual duration for each LED state** (NEW!)
  * - Single slot with 2000 pattern segments (expandable to 32 slots)
  * - Maximum recording duration: 90 seconds per slot
- * - Plays back recorded patterns on 3 individual LEDs
- * - CSV export via serial for 3-bit pattern data
+ * - Plays back recorded patterns with precise timing
+ * - CSV export via serial for 3-bit pattern data WITH durations
  * - Auto-stop on inactivity
  * - Debounced button inputs
  */
@@ -27,17 +28,17 @@ const uint8_t LED_OUT_PIN_2 = 8;   // LED 2 output for playback
 const uint8_t LED_OUT_PIN_3 = 9;   // LED 3 output for playback
 // Recording buttons (3 buttons instead of 1)
 const uint8_t BTN_1_PIN = 4;        // Button 1 for recording pattern
-const uint8_t BTN_2_PIN = 5;        // Button 2 for recording pattern
-const uint8_t BTN_3_PIN = 6;        // Button 3 for recording pattern
+const uint8_t BTN_2_PIN = 6;        // Button 2 for recording pattern
+const uint8_t BTN_3_PIN = 2;        // Button 3 for recording pattern
 // Control buttons
 const uint8_t REC_PIN = 10;         // Record button (start/stop recording)
 const uint8_t PLAY_PIN = 11;        // Play button
 const uint8_t CLR_PIN = 12;         // Clear slot button
 const uint8_t STOP_PIN = 3;         // Stop button
-const uint8_t DUMP_PIN = 29;        // Dump to serial button
+const uint8_t DUMP_PIN = 13;        // Dump to serial button (GP13 - FIXED for Pico)
 
 // Slot selection toggle switches (not used in single-slot mode, but kept for future expansion)
-const uint8_t TGL_PINS[2] = {13, 14};  // Can be expanded to 5 pins for 32 slots
+const uint8_t TGL_PINS[2] = {14, 15};  // Can be expanded to 5 pins for 32 slots
 
 // Status indicator
 const uint8_t STATUS_LED = 5;       // Status LED (blinks during record, solid during play)
@@ -61,9 +62,10 @@ const char* CSV_PREFIX = "@RZ1CSV:"; // CSV export prefix
 
 // Pattern data storage: each part is a 3-bit LED state (0-7) where:
 // Bit 0 = LED 1 state, Bit 1 = LED 2 state, Bit 2 = LED 3 state
-uint8_t parts[NUM_SLOTS][MAX_PARTS];   // 3-bit LED states for each slot
-uint16_t partCount[NUM_SLOTS] = {0};   // Number of parts in each slot
-uint32_t totalMs[NUM_SLOTS] = {0};     // Total duration of each slot
+uint8_t parts[NUM_SLOTS][MAX_PARTS];      // 3-bit LED states for each slot
+uint16_t durations[NUM_SLOTS][MAX_PARTS]; // Duration in ms for each state (NEW!)
+uint16_t partCount[NUM_SLOTS] = {0};      // Number of parts in each slot
+uint32_t totalMs[NUM_SLOTS] = {0};        // Total duration of each slot
 
 // ============================================================================
 // GLOBAL VARIABLES - State Management
@@ -217,9 +219,12 @@ void endPart(uint32_t now) {
   // Clip duration to remaining time
   if (r > rem) r = (uint16_t)rem;
   
-  // Store the 3-bit LED state
+  // Store the 3-bit LED state AND its duration
   if (partCount[activeSlot] < MAX_PARTS && r > 0) {
-    parts[activeSlot][partCount[activeSlot]++] = curState;
+    uint16_t idx = partCount[activeSlot];
+    parts[activeSlot][idx] = curState;      // Store LED state
+    durations[activeSlot][idx] = r;         // Store duration (NEW!)
+    partCount[activeSlot]++;
     totalMs[activeSlot] += r;
   }
   
@@ -265,8 +270,8 @@ void clearSlot(uint8_t s) {
 }
 
 /**
- * Dump slot data to serial in CSV format
- * Format: @RZ1CSV:1,slot,count,totalMs,part1,part2,...
+ * Dump slot data to serial in CSV format with durations
+ * Format: @RZ1CSV:4,slot,count,totalMs,state1:dur1,state2:dur2,...
  */
 void dumpSlot(uint8_t s) {
   stopRec(millis());
@@ -276,7 +281,7 @@ void dumpSlot(uint8_t s) {
   uint32_t tot = totalMs[s];
   
   Serial.print(CSV_PREFIX);
-  Serial.print("3,");  // 3-bit LED format
+  Serial.print("4,");  // Format version 4 = 3-bit LED with durations
   Serial.print(s);
   Serial.print(",");
   Serial.print(count);
@@ -285,7 +290,9 @@ void dumpSlot(uint8_t s) {
   
   for (uint16_t i = 0; i < count; ++i) {
     Serial.print(",");
-    Serial.print(parts[s][i]);  // 3-bit LED state (0-7)
+    Serial.print(parts[s][i]);        // 3-bit LED state (0-7)
+    Serial.print(":");
+    Serial.print(durations[s][i]);    // Duration in ms (NEW!)
   }
   
   Serial.println();
@@ -522,8 +529,9 @@ void loop() {
       // Playback complete
       resetPlay();
     } else {
-      // Get current 3-bit LED state
+      // Get current 3-bit LED state and its duration
       uint8_t ledState = parts[activeSlot][playIndex];
+      uint16_t duration = durations[activeSlot][playIndex];  // Use recorded duration!
       
       // Set individual LEDs based on bit values
       digitalWrite(LED_OUT_PIN_1, (ledState & 1) ? HIGH : LOW);
@@ -531,9 +539,8 @@ void loop() {
       digitalWrite(LED_OUT_PIN_3, (ledState & 4) ? HIGH : LOW);
       
       if (playPhase == 0) {
-        // Phase 0: Wait for duration
-        uint32_t dur = 100; // Default duration for playback (can be made configurable)
-        if (now - phaseStartMs >= dur) {
+        // Phase 0: Wait for recorded duration
+        if (now - phaseStartMs >= duration) {
           playPhase = 1;
           phaseStartMs = now;
         }

@@ -1,10 +1,11 @@
 /*
- * 3-LED Pattern Player for Iraq Flasher
+ * 3-LED Pattern Player for Iraq Flasher (WITH DURATION SUPPORT)
  * 
  * This sketch plays back pre-programmed 3-LED patterns based on button selection.
  * Features:
  * - 18 pre-programmed patterns (modes 1-18)
  * - Each pattern controls 3 LEDs independently using 3-bit states
+ * - **Variable duration support** - each LED state has custom timing
  * - Hierarchical mode selection using 7 buttons
  * - BTN_14 and BTN_15 act as mode modifiers
  * - Debounced button inputs
@@ -15,6 +16,7 @@
  * - Bit 0 controls LED 1
  * - Bit 1 controls LED 2
  * - Bit 2 controls LED 3
+ * Each state has a corresponding duration in milliseconds
  * 
  * Mode Selection:
  * - BTN_9-13 alone: Modes 2-6 (or mode 1 if none)
@@ -49,15 +51,19 @@ const uint8_t BTN_15 = 15;          // Mode modifier (modes 13-18)
 const unsigned long DEBOUNCE_MS = 50UL;  // Button debounce time
 
 // ============================================================================
-// PRE-PROGRAMMED PATTERNS
+// PRE-PROGRAMMED PATTERNS (WITH DURATIONS)
 // ============================================================================
 // Each pattern is an array of 3-bit LED states (0-7)
 // Bit 0 = LED 1 state, Bit 1 = LED 2 state, Bit 2 = LED 3 state
 // Each element represents which LEDs should be ON at that step
+// Each pattern has a corresponding duration array (in milliseconds)
 
 // Mode 1 pattern - Sequential LED activation
 const uint8_t parts_mode1[] = {
   1,0,2,0,4,0,1,2,0,3,0,4,0,5,0,6,0,7,0,6,0,5,0,4,0,3,0,2,0,1,0
+};
+const uint16_t durations_mode1[] = {
+  150,150,150,150,150,150,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,150,150
 };
 const size_t NUM_MODE1 = sizeof(parts_mode1) / sizeof(parts_mode1[0]);
 
@@ -65,11 +71,17 @@ const size_t NUM_MODE1 = sizeof(parts_mode1) / sizeof(parts_mode1[0]);
 const uint8_t parts_mode2[] = {
   0,1,2,3,4,5,6,7,6,5,4,3,2,1,0,1,3,5,7,2,4,6,0
 };
+const uint16_t durations_mode2[] = {
+  200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,150,150,150,150,150,150,150,200
+};
 const size_t NUM_MODE2 = sizeof(parts_mode2) / sizeof(parts_mode2[0]);
 
 // Mode 3 pattern - Chase effect
 const uint8_t parts_mode3[] = {
   1,2,4,0,2,4,1,0,4,1,2,0,1,2,4,0,7,0,1,2,4
+};
+const uint16_t durations_mode3[] = {
+  100,100,100,50,100,100,100,50,100,100,100,50,100,100,100,100,200,100,100,100,100
 };
 const size_t NUM_MODE3 = sizeof(parts_mode3) / sizeof(parts_mode3[0]);
 
@@ -77,11 +89,17 @@ const size_t NUM_MODE3 = sizeof(parts_mode3) / sizeof(parts_mode3[0]);
 const uint8_t parts_mode4[] = {
   1,3,7,0,2,6,4,0,5,1,3,0,6,2,4,0,7,5,1,0,3,7,2,0
 };
+const uint16_t durations_mode4[] = {
+  120,180,250,100,150,200,180,100,220,120,180,100,200,150,180,100,300,220,120,100,180,250,150,100
+};
 const size_t NUM_MODE4 = sizeof(parts_mode4) / sizeof(parts_mode4[0]);
 
 // Mode 5 pattern - Flashing all LEDs
 const uint8_t parts_mode5[] = {
   0,7,0,7,0,1,2,4,0,3,5,6,0,7,0,1,4,0,2,5,0,3,6,0
+};
+const uint16_t durations_mode5[] = {
+  100,100,100,100,200,150,150,150,100,150,150,150,100,200,100,150,150,100,150,150,100,150,150,100
 };
 const size_t NUM_MODE5 = sizeof(parts_mode5) / sizeof(parts_mode5[0]);
 
@@ -89,65 +107,98 @@ const size_t NUM_MODE5 = sizeof(parts_mode5) / sizeof(parts_mode5[0]);
 const uint8_t parts_mode6[] = {
   1,4,0,1,4,0,5,0,5,0,1,4,0,5,0,1,0,4,0,5,1,4,0
 };
+const uint16_t durations_mode6[] = {
+  120,120,80,120,120,80,200,80,200,80,120,120,80,200,80,120,80,120,80,200,120,120,80
+};
 const size_t NUM_MODE6 = sizeof(parts_mode6) / sizeof(parts_mode6[0]);
 
-// Mode 7 pattern - LED 2 only
+// Mode 7 pattern - LED 2 only (blink)
 const uint8_t parts_mode7[] = {
   2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0
 };
+const uint16_t durations_mode7[] = {
+  100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100
+};
 const size_t NUM_MODE7 = sizeof(parts_mode7) / sizeof(parts_mode7[0]);
 
-// Mode 8 pattern - LED 1 and 2
+// Mode 8 pattern - LED 1 and 2 (blink)
 const uint8_t parts_mode8[] = {
   3,0,3,0,3,0,3,0,3,0,3,0,3,0,3,0,3,0,3,0,3,0,3,0,3,0
 };
+const uint16_t durations_mode8[] = {
+  150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150,150
+};
 const size_t NUM_MODE8 = sizeof(parts_mode8) / sizeof(parts_mode8[0]);
 
-// Mode 9 pattern - LED 2 and 3
+// Mode 9 pattern - LED 2 and 3 (blink)
 const uint8_t parts_mode9[] = {
   6,0,6,0,6,0,6,0,6,0,6,0,6,0,6,0,6,0,6,0,6,0,6,0,6,0
 };
+const uint16_t durations_mode9[] = {
+  200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200
+};
 const size_t NUM_MODE9 = sizeof(parts_mode9) / sizeof(parts_mode9[0]);
 
-// Mode 10 pattern - LED 1 and 3
+// Mode 10 pattern - LED 1 and 3 (blink)
 const uint8_t parts_mode10[] = {
   5,0,5,0,5,0,5,0,5,0,5,0,5,0,5,0,5,0,5,0,5,0,5,0,5,0
 };
+const uint16_t durations_mode10[] = {
+  180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180
+};
 const size_t NUM_MODE10 = sizeof(parts_mode10) / sizeof(parts_mode10[0]);
 
-// Mode 11 pattern - All LEDs
+// Mode 11 pattern - All LEDs (fast strobe)
 const uint8_t parts_mode11[] = {
   7,0,7,0,7,0,7,0,7,0,7,0,7,0,7,0,7,0,7,0,7,0,7,0,7,0
 };
+const uint16_t durations_mode11[] = {
+  50,50,50,50,50,300,50,50,50,50,50,300,50,50,50,50,50,300,50,50,50,50,50,300,50,50
+};
 const size_t NUM_MODE11 = sizeof(parts_mode11) / sizeof(parts_mode11[0]);
 
-// Mode 12 pattern - No LEDs
+// Mode 12 pattern - All off (idle)
 const uint8_t parts_mode12[] = {
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
+const uint16_t durations_mode12[] = {
+  100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100
+};
 const size_t NUM_MODE12 = sizeof(parts_mode12) / sizeof(parts_mode12[0]);
 
-// Mode 13 pattern - LED 1 only
+// Mode 13 pattern - LED 1 only (blink)
 const uint8_t parts_mode13[] = {
   1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0
 };
+const uint16_t durations_mode13[] = {
+  120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120
+};
 const size_t NUM_MODE13 = sizeof(parts_mode13) / sizeof(parts_mode13[0]);
 
-// Mode 14 pattern - LED 3 only
+// Mode 14 pattern - LED 3 only (blink)
 const uint8_t parts_mode14[] = {
   4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0,4,0
 };
+const uint16_t durations_mode14[] = {
+  140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140,140
+};
 const size_t NUM_MODE14 = sizeof(parts_mode14) / sizeof(parts_mode14[0]);
 
-// Mode 15 pattern - LED 1 and 2 and 3
+// Mode 15 pattern - Complex sequence
 const uint8_t parts_mode15[] = {
   7,1,3,5,0,6,2,4,0,7,0,1,0,3,0,5,0,6,0,2,0,4,0,7,0
 };
+const uint16_t durations_mode15[] = {
+  200,100,100,100,100,100,100,100,100,200,100,150,100,150,100,150,100,150,100,150,100,150,100,200,100
+};
 const size_t NUM_MODE15 = sizeof(parts_mode15) / sizeof(parts_mode15[0]);
 
-// Mode 16 pattern - Complex sequence
+// Mode 16 pattern - Smooth wave
 const uint8_t parts_mode16[] = {
   1,2,3,4,5,6,7,0,0,7,6,5,4,3,2,1,0,1,3,7,0,2,6,0,4,5,0
+};
+const uint16_t durations_mode16[] = {
+  80,80,80,80,80,80,80,200,200,80,80,80,80,80,80,80,150,100,100,150,100,100,150,100,100,150,200
 };
 const size_t NUM_MODE16 = sizeof(parts_mode16) / sizeof(parts_mode16[0]);
 
@@ -155,11 +206,17 @@ const size_t NUM_MODE16 = sizeof(parts_mode16) / sizeof(parts_mode16[0]);
 const uint8_t parts_mode17[] = {
   1,2,4,0,3,5,7,0,2,4,6,0,1,3,5,0,4,6,0,2,0,1,7,0
 };
+const uint16_t durations_mode17[] = {
+  60,60,60,40,60,60,60,40,60,60,60,40,60,60,60,40,60,60,40,60,40,60,100,40
+};
 const size_t NUM_MODE17 = sizeof(parts_mode17) / sizeof(parts_mode17[0]);
 
-// Mode 18 pattern - All off
+// Mode 18 pattern - Breathing effect
 const uint8_t parts_mode18[] = {
-  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  0,1,3,7,3,1,0,2,6,7,6,2,0,4,5,7,5,4,0
+};
+const uint16_t durations_mode18[] = {
+  300,200,200,300,200,200,300,200,200,300,200,200,300,200,200,300,200,200,300
 };
 const size_t NUM_MODE18 = sizeof(parts_mode18) / sizeof(parts_mode18[0]);
 
@@ -211,6 +268,29 @@ const size_t modeLengths[] = {
   NUM_MODE16,
   NUM_MODE17,
   NUM_MODE18
+};
+
+// Array of pointers to duration arrays (indexed by mode number)
+const uint16_t* const modeDurations[] = {
+  nullptr,           // Mode 0 (unused)
+  durations_mode1,
+  durations_mode2,
+  durations_mode3,
+  durations_mode4,
+  durations_mode5,
+  durations_mode6,
+  durations_mode7,
+  durations_mode8,
+  durations_mode9,
+  durations_mode10,
+  durations_mode11,
+  durations_mode12,
+  durations_mode13,
+  durations_mode14,
+  durations_mode15,
+  durations_mode16,
+  durations_mode17,
+  durations_mode18
 };
 
 // ============================================================================
@@ -340,17 +420,18 @@ bool waitWithButtonCheck(unsigned long durationMs) {
 // ============================================================================
 
 /**
- * Play the current mode's pattern in a loop
+ * Play the current mode's pattern in a loop with variable durations
  * Exits when mode changes
- * Even pattern indices turn LED ON, odd indices turn LED OFF
+ * Each LED state displays for its specified duration
  */
 void runCurrentModePattern() {
   uint8_t mode = currentMode;
   const uint8_t* pattern = modeParts[mode];
+  const uint16_t* durations = modeDurations[mode];
   size_t len = modeLengths[mode];
   
   // Skip if invalid pattern
-  if (pattern == nullptr || len == 0) return;
+  if (pattern == nullptr || durations == nullptr || len == 0) return;
   
   // Turn on status LED during playback
   digitalWrite(STATUS_LED, HIGH);
@@ -367,8 +448,9 @@ void runCurrentModePattern() {
       digitalWrite(LED_OUT_PIN_2, (ledState & 2) ? HIGH : LOW);
       digitalWrite(LED_OUT_PIN_3, (ledState & 4) ? HIGH : LOW);
       
-      // Wait for pattern duration, checking for mode change
-      if (waitWithButtonCheck(100)) break;  // Default 100ms per step
+      // Wait for the specific duration for this LED state
+      uint16_t duration = durations[i];
+      if (waitWithButtonCheck(duration)) break;
     }
   }
   
