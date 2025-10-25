@@ -1,11 +1,16 @@
 /*
- * Pattern Recorder/Player for Iraq Flasher
+ * 3-LED Pattern Recorder/Player for Iraq Flasher (RP2040 Version)
  * 
- * This sketch records and plays back button press patterns with precise timing.
+ * This sketch records and plays back 3-button patterns that control 3 LEDs.
+ * Optimized for RP2040 Zero with 264KB SRAM
+ * 
  * Features:
- * - Records button press/release patterns to 32 slots
- * - Plays back recorded patterns on LED output
- * - CSV export via serial for pattern data
+ * - Records 3-bit LED states (0-7) from 3 button combinations
+ * - Each LED state represents which of the 3 LEDs should be ON
+ * - Single slot with 2000 pattern segments (expandable to 32 slots)
+ * - Maximum recording duration: 90 seconds per slot
+ * - Plays back recorded patterns on 3 individual LEDs
+ * - CSV export via serial for 3-bit pattern data
  * - Auto-stop on inactivity
  * - Debounced button inputs
  */
@@ -17,27 +22,32 @@
 // ============================================================================
 
 // Input/Output pins
-const uint8_t BTN_PIN = 4;          // Button to record pattern from
-const uint8_t LED_OUT_PIN = 7;      // LED output for playback
+const uint8_t LED_OUT_PIN_1 = 7;   // LED 1 output for playback
+const uint8_t LED_OUT_PIN_2 = 8;   // LED 2 output for playback
+const uint8_t LED_OUT_PIN_3 = 9;   // LED 3 output for playback
+// Recording buttons (3 buttons instead of 1)
+const uint8_t BTN_1_PIN = 4;        // Button 1 for recording pattern
+const uint8_t BTN_2_PIN = 5;        // Button 2 for recording pattern
+const uint8_t BTN_3_PIN = 6;        // Button 3 for recording pattern
 // Control buttons
-const uint8_t REC_PIN = 10;         // Record button
+const uint8_t REC_PIN = 10;         // Record button (start/stop recording)
 const uint8_t PLAY_PIN = 11;        // Play button
 const uint8_t CLR_PIN = 12;         // Clear slot button
 const uint8_t STOP_PIN = 3;         // Stop button
 const uint8_t DUMP_PIN = 29;        // Dump to serial button
 
-// Slot selection toggle switches (5 bits = 32 slots)
-const uint8_t TGL_PINS[5] = {13, 14, 15, 26, 27};
+// Slot selection toggle switches (not used in single-slot mode, but kept for future expansion)
+const uint8_t TGL_PINS[2] = {13, 14};  // Can be expanded to 5 pins for 32 slots
 
 // Status indicator
 const uint8_t STATUS_LED = 5;       // Status LED (blinks during record, solid during play)
 
 // ============================================================================
-// CONFIGURATION CONSTANTS
+// CONFIGURATION CONSTANTS (RP2040 Optimized)
 // ============================================================================
 
-const uint8_t NUM_SLOTS = 32;       // Number of pattern storage slots
-const uint16_t MAX_PARTS = 1300;    // Maximum pattern segments per slot
+const uint8_t NUM_SLOTS = 1;        // Single slot mode (expandable to 32 with RP2040's memory)
+const uint16_t MAX_PARTS = 2000;    // 2000 pattern segments (10x Arduino capacity)
 const uint32_t FILE_MAX_MS = 90000; // Maximum recording duration (90 seconds)
 const uint32_t AUTO_STOP_MS = 30000;// Auto-stop after 30s of inactivity
 const uint16_t DEBOUNCE_MS = 15;    // Debounce time for control buttons
@@ -49,8 +59,9 @@ const char* CSV_PREFIX = "@RZ1CSV:"; // CSV export prefix
 // GLOBAL VARIABLES - Pattern Storage
 // ============================================================================
 
-// Pattern data storage: each part is a duration in milliseconds (rounded to 5ms)
-uint16_t parts[NUM_SLOTS][MAX_PARTS];  // Pattern segments for each slot
+// Pattern data storage: each part is a 3-bit LED state (0-7) where:
+// Bit 0 = LED 1 state, Bit 1 = LED 2 state, Bit 2 = LED 3 state
+uint8_t parts[NUM_SLOTS][MAX_PARTS];   // 3-bit LED states for each slot
 uint16_t partCount[NUM_SLOTS] = {0};   // Number of parts in each slot
 uint32_t totalMs[NUM_SLOTS] = {0};     // Total duration of each slot
 
@@ -61,11 +72,12 @@ uint32_t totalMs[NUM_SLOTS] = {0};     // Total duration of each slot
 // Recording/Playing state
 bool recording = false;             // Currently recording a pattern
 bool playing = false;               // Currently playing a pattern
-uint8_t activeSlot = 0;             // Currently active slot (0-31)
+uint8_t activeSlot = 0;             // Currently active slot (always 0 in single-slot mode)
 
-// Recording state tracking
+// Recording state tracking (3 buttons)
 bool started = false;               // Recording has started (first button press received)
-bool curState = false;              // Current button state during recording
+uint8_t curState = 0;               // Current 3-bit button state (0-7)
+uint8_t prevState = 0;              // Previous 3-bit button state
 uint32_t lastChangeUs = 0;          // Last state change timestamp (microseconds)
 uint32_t lastActivityMs = 0;        // Last activity timestamp (milliseconds)
 
@@ -92,11 +104,14 @@ struct Deb {
 // Debounce instances for control buttons
 Deb dbRec, dbPlay, dbClr, dbStop, dbDump;
 
-// Main button (BTN_PIN) uses custom glitch filter
-bool btn_stable = HIGH;             // Stable button state
-bool btn_prev = HIGH;               // Previous stable state
-bool btn_last_raw = HIGH;           // Last raw reading
-uint32_t btn_last_raw_change_us = 0;// Last raw change timestamp
+// Main buttons (3 buttons) use custom glitch filter
+uint8_t btn1_stable = HIGH, btn1_prev = HIGH, btn1_last_raw = HIGH;
+uint8_t btn2_stable = HIGH, btn2_prev = HIGH, btn2_last_raw = HIGH;
+uint8_t btn3_stable = HIGH, btn3_prev = HIGH, btn3_last_raw = HIGH;
+uint32_t btn1_last_raw_change_us = 0;
+uint32_t btn2_last_raw_change_us = 0;
+uint32_t btn3_last_raw_change_us = 0;
+uint32_t last_button_change_us = 0; // Last time any button changed
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -140,16 +155,20 @@ bool upd(Deb& d, bool raw, uint32_t now) {
 
 /**
  * Read slot selection from toggle switches
- * Returns 0-31 based on which switches are LOW
+ * In single-slot mode, always returns 0
+ * Toggle switches kept for future multi-slot expansion
  */
 uint8_t readSlot() {
-  uint8_t v = 0;
-  for (uint8_t i = 0; i < 5; ++i) {
-    if (digitalRead(TGL_PINS[i]) == LOW) {
-      v |= (1 << i);
-    }
-  }
-  return v;
+  return 0;  // Single slot mode - always use slot 0
+  
+  // For future multi-slot expansion, uncomment:
+  // uint8_t v = 0;
+  // for (uint8_t i = 0; i < 2; ++i) {
+  //   if (digitalRead(TGL_PINS[i]) == LOW) {
+  //     v |= (1 << i);
+  //   }
+  // }
+  // return v;
 }
 
 /**
@@ -157,7 +176,9 @@ uint8_t readSlot() {
  */
 void resetPlay() {
   playing = false;
-  digitalWrite(LED_OUT_PIN, LOW);
+  digitalWrite(LED_OUT_PIN_1, LOW);
+  digitalWrite(LED_OUT_PIN_2, LOW);
+  digitalWrite(LED_OUT_PIN_3, LOW);
   setStatusIdle();
 }
 
@@ -187,7 +208,7 @@ void endPart(uint32_t now) {
   uint32_t rem = (FILE_MAX_MS > totalMs[activeSlot]) ? (FILE_MAX_MS - totalMs[activeSlot]) : 0;
   if (rem == 0) {
     recording = false;
-    digitalWrite(LED_OUT_PIN, LOW);
+    digitalWrite(STATUS_LED, LOW);
     started = false;
     setStatusIdle();
     return;
@@ -196,9 +217,9 @@ void endPart(uint32_t now) {
   // Clip duration to remaining time
   if (r > rem) r = (uint16_t)rem;
   
-  // Store the part
+  // Store the 3-bit LED state
   if (partCount[activeSlot] < MAX_PARTS && r > 0) {
-    parts[activeSlot][partCount[activeSlot]++] = r;
+    parts[activeSlot][partCount[activeSlot]++] = curState;
     totalMs[activeSlot] += r;
   }
   
@@ -208,7 +229,7 @@ void endPart(uint32_t now) {
   // Stop if limits reached
   if (totalMs[activeSlot] >= FILE_MAX_MS || partCount[activeSlot] >= MAX_PARTS) {
     recording = false;
-    digitalWrite(LED_OUT_PIN, LOW);
+    digitalWrite(STATUS_LED, LOW);
     started = false;
     setStatusIdle();
   }
@@ -221,7 +242,7 @@ void stopRec(uint32_t now) {
   if (recording) {
     endPart(now);
     recording = false;
-    digitalWrite(LED_OUT_PIN, LOW);
+    digitalWrite(STATUS_LED, LOW);
     started = false;
     setStatusIdle();
   }
@@ -255,7 +276,7 @@ void dumpSlot(uint8_t s) {
   uint32_t tot = totalMs[s];
   
   Serial.print(CSV_PREFIX);
-  Serial.print("1,");
+  Serial.print("3,");  // 3-bit LED format
   Serial.print(s);
   Serial.print(",");
   Serial.print(count);
@@ -264,7 +285,7 @@ void dumpSlot(uint8_t s) {
   
   for (uint16_t i = 0; i < count; ++i) {
     Serial.print(",");
-    Serial.print(parts[s][i]);
+    Serial.print(parts[s][i]);  // 3-bit LED state (0-7)
   }
   
   Serial.println();
@@ -275,18 +296,25 @@ void dumpSlot(uint8_t s) {
 // ============================================================================
 
 void setup() {
-  // Configure pins
-  pinMode(BTN_PIN, INPUT_PULLUP);
-  pinMode(LED_OUT_PIN, OUTPUT);
-  digitalWrite(LED_OUT_PIN, LOW);
+  // Configure LED output pins
+  pinMode(LED_OUT_PIN_1, OUTPUT);
+  pinMode(LED_OUT_PIN_2, OUTPUT);
+  pinMode(LED_OUT_PIN_3, OUTPUT);
+  digitalWrite(LED_OUT_PIN_1, LOW);
+  digitalWrite(LED_OUT_PIN_2, LOW);
+  digitalWrite(LED_OUT_PIN_3, LOW);
+  
+  // Configure recording button pins
+  pinMode(BTN_1_PIN, INPUT_PULLUP);
+  pinMode(BTN_2_PIN, INPUT_PULLUP);
+  pinMode(BTN_3_PIN, INPUT_PULLUP);
   
   pinMode(REC_PIN, INPUT_PULLUP);
-  pinMode(PLAY_PIN, INPUT_PULLUP);
   pinMode(CLR_PIN, INPUT_PULLUP);
   pinMode(STOP_PIN, INPUT_PULLUP);
   pinMode(DUMP_PIN, INPUT_PULLUP);
   
-  for (uint8_t i = 0; i < 5; ++i) {
+  for (uint8_t i = 0; i < 2; ++i) {
     pinMode(TGL_PINS[i], INPUT_PULLUP);
   }
   
@@ -306,8 +334,14 @@ void setup() {
   dbDump.stable = dbDump.prev = HIGH;
   dbDump.t = now;
   
-  btn_stable = btn_prev = btn_last_raw = HIGH;
-  btn_last_raw_change_us = micros();
+  // Initialize 3-button states
+  btn1_stable = btn1_prev = btn1_last_raw = HIGH;
+  btn1_last_raw_change_us = micros();
+  btn2_stable = btn2_prev = btn2_last_raw = HIGH;
+  btn2_last_raw_change_us = micros();
+  btn3_stable = btn3_prev = btn3_last_raw = HIGH;
+  btn3_last_raw_change_us = micros();
+  last_button_change_us = micros();
   
   // Initialize serial for CSV output
   Serial.begin(115200);
@@ -321,18 +355,45 @@ void loop() {
   uint32_t now = millis();
   uint32_t nowUs = micros();
   
-  // ---- Main button debouncing with glitch filter ----
-  bool rawBTN = digitalRead(BTN_PIN);
-  if (rawBTN != btn_last_raw) {
-    btn_last_raw = rawBTN;
-    btn_last_raw_change_us = nowUs;
+  // ---- 3-Button debouncing with glitch filter ----
+  bool rawBtn1 = digitalRead(BTN_1_PIN);
+  bool rawBtn2 = digitalRead(BTN_2_PIN);
+  bool rawBtn3 = digitalRead(BTN_3_PIN);
+  
+  // Track button 1
+  if (rawBtn1 != btn1_last_raw) {
+    btn1_last_raw = rawBtn1;
+    btn1_last_raw_change_us = nowUs;
+  }
+  if ((rawBtn1 != btn1_stable) && (nowUs - btn1_last_raw_change_us >= BTN_GLITCH_US)) {
+    btn1_prev = btn1_stable;
+    btn1_stable = rawBtn1;
   }
   
-  bool eBTN = false;  // Button event flag
-  if ((rawBTN != btn_stable) && (nowUs - btn_last_raw_change_us >= BTN_GLITCH_US)) {
-    btn_prev = btn_stable;
-    btn_stable = rawBTN;
-    eBTN = true;
+  // Track button 2
+  if (rawBtn2 != btn2_last_raw) {
+    btn2_last_raw = rawBtn2;
+    btn2_last_raw_change_us = nowUs;
+  }
+  if ((rawBtn2 != btn2_stable) && (nowUs - btn2_last_raw_change_us >= BTN_GLITCH_US)) {
+    btn2_prev = btn2_stable;
+    btn2_stable = rawBtn2;
+  }
+  
+  // Track button 3
+  if (rawBtn3 != btn3_last_raw) {
+    btn3_last_raw = rawBtn3;
+    btn3_last_raw_change_us = nowUs;
+  }
+  if ((rawBtn3 != btn3_stable) && (nowUs - btn3_last_raw_change_us >= BTN_GLITCH_US)) {
+    btn3_prev = btn3_stable;
+    btn3_stable = rawBtn3;
+  }
+  
+  // Check if any button state changed
+  bool anyButtonChanged = (btn1_stable != btn1_prev) || (btn2_stable != btn2_prev) || (btn3_stable != btn3_prev);
+  if (anyButtonChanged) {
+    last_button_change_us = nowUs;
   }
 
   // ---- Control button debouncing ----
@@ -369,9 +430,14 @@ void loop() {
       totalMs[activeSlot] = 0;
       recording = true;
       started = false;
-      curState = false;
+      curState = 0;
+      prevState = 0;
       lastChangeUs = nowUs;
       lastActivityMs = now;
+      // Set initial LED state based on current button states
+      curState = (btn1_stable == LOW ? 1 : 0) | 
+                 (btn2_stable == LOW ? 2 : 0) | 
+                 (btn3_stable == LOW ? 4 : 0);
     } else {
       // Stop recording
       stopRec(now);
@@ -409,14 +475,20 @@ void loop() {
 
   // ---- Recording state machine ----
   if (recording) {
+    // Update current LED state based on button states
+    uint8_t newState = (btn1_stable == LOW ? 1 : 0) | 
+                       (btn2_stable == LOW ? 2 : 0) | 
+                       (btn3_stable == LOW ? 4 : 0);
+    
     if (!started) {
-      // Waiting for first button press to start recording
-      if (eBTN && btn_prev == HIGH && btn_stable == LOW) {
+      // Waiting for first button change to start recording
+      if (newState != curState) {
         started = true;
-        curState = true;
+        curState = newState;
         lastChangeUs = nowUs;
         lastActivityMs = now;
-        digitalWrite(LED_OUT_PIN, HIGH);
+        // Set LEDs to show current state
+        digitalWrite(STATUS_LED, HIGH);
       } else {
         // Auto-stop if no activity
         if (now - lastActivityMs >= AUTO_STOP_MS) {
@@ -424,19 +496,14 @@ void loop() {
         }
       }
     } else {
-      // Recording in progress - track button state changes
-      if (eBTN) {
-        if (curState && btn_prev == LOW && btn_stable == HIGH) {
-          // Button released
-          endPart(now);
-          curState = false;
-          digitalWrite(LED_OUT_PIN, LOW);
-        } else if (!curState && btn_prev == HIGH && btn_stable == LOW) {
-          // Button pressed
-          endPart(now);
-          curState = true;
-          digitalWrite(LED_OUT_PIN, HIGH);
-        }
+      // Recording in progress - track state changes
+      if (newState != curState) {
+        // State changed, record the previous state with duration
+        endPart(now);
+        prevState = curState;
+        curState = newState;
+        lastChangeUs = nowUs;
+        lastActivityMs = now;
       }
       
       // Auto-stop conditions
@@ -455,13 +522,17 @@ void loop() {
       // Playback complete
       resetPlay();
     } else {
-      // Determine LED state (even indices = ON, odd = OFF)
-      bool on = (playIndex % 2 == 0);
-      uint32_t dur = parts[activeSlot][playIndex];
+      // Get current 3-bit LED state
+      uint8_t ledState = parts[activeSlot][playIndex];
+      
+      // Set individual LEDs based on bit values
+      digitalWrite(LED_OUT_PIN_1, (ledState & 1) ? HIGH : LOW);
+      digitalWrite(LED_OUT_PIN_2, (ledState & 2) ? HIGH : LOW);
+      digitalWrite(LED_OUT_PIN_3, (ledState & 4) ? HIGH : LOW);
       
       if (playPhase == 0) {
-        // Phase 0: Set LED and wait for duration
-        digitalWrite(LED_OUT_PIN, on ? HIGH : LOW);
+        // Phase 0: Wait for duration
+        uint32_t dur = 100; // Default duration for playback (can be made configurable)
         if (now - phaseStartMs >= dur) {
           playPhase = 1;
           phaseStartMs = now;
